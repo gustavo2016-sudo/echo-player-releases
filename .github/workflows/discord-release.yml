@@ -5,24 +5,39 @@ name: Announce release on Discord
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to announce
+        required: true
+        type: string
+      notes:
+        description: Published release notes
+        required: true
+        type: string
+      url:
+        description: Published release URL
+        required: true
+        type: string
 
 permissions: {}
 
 jobs:
   announce:
-    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.draft && !github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     steps:
       - name: Send release notes
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          RELEASE_VERSION: ${{ github.event.release.tag_name }}
-          RELEASE_NOTES: ${{ github.event.release.body }}
-          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_NOTES: ${{ github.event.release.body || inputs.notes }}
+          RELEASE_URL: ${{ github.event.release.html_url || inputs.url }}
         run: |
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           webhook = os.environ.get('DISCORD_WEBHOOK_URL')
@@ -46,10 +61,23 @@ jobs:
           request = urllib.request.Request(
               url,
               data=body,
-              headers={'Content-Type': 'application/json; charset=utf-8'},
+              headers={
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'User-Agent': 'Mozilla/5.0 (compatible; echo-release-bot/1.0)',
+              },
               method='POST',
           )
-          with urllib.request.urlopen(request, timeout=20) as response:
-              if response.status != 200:
-                  raise SystemExit('Discord did not confirm the message')
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  if response.status != 200:
+                      raise SystemExit('Discord did not confirm the message')
+          except urllib.error.HTTPError as error:
+              content_type = error.headers.get('Content-Type', '')
+              detail = ''
+              if 'application/json' in content_type:
+                  try:
+                      detail = ' code=' + str(json.load(error).get('code', 'unknown'))
+                  except (ValueError, OSError):
+                      pass
+              raise SystemExit(f'Discord HTTP {error.code}; content-type={content_type}{detail}')
           PY
