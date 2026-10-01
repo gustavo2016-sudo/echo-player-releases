@@ -1,0 +1,55 @@
+# Copy this file to .github/workflows/discord-release.yml in the public
+# echo-player-releases repository. Its DISCORD_WEBHOOK_URL is an Actions secret.
+name: Announce release on Discord
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  announce:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send release notes
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name }}
+          RELEASE_NOTES: ${{ github.event.release.body }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          webhook = os.environ.get('DISCORD_WEBHOOK_URL')
+          if not webhook:
+              raise SystemExit('DISCORD_WEBHOOK_URL secret is missing')
+
+          notes = os.environ.get('RELEASE_NOTES', '').strip() or 'Atualização do echo.'
+          if len(notes) > 3900:
+              notes = notes[:3896] + '…'
+          payload = {
+              'allowed_mentions': {'parse': []},
+              'embeds': [{
+                  'title': 'echo ' + os.environ['RELEASE_VERSION'],
+                  'description': notes,
+                  'url': os.environ['RELEASE_URL'],
+                  'color': 0xE85D3F,
+              }],
+          }
+          body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+          url = webhook + ('&' if '?' in webhook else '?') + 'wait=true'
+          request = urllib.request.Request(
+              url,
+              data=body,
+              headers={'Content-Type': 'application/json; charset=utf-8'},
+              method='POST',
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              if response.status != 200:
+                  raise SystemExit('Discord did not confirm the message')
+          PY
